@@ -1,0 +1,35 @@
+# dig-relay-protocol — the canonical NODE-TO-RELAY wire for the DIG Network relay.
+#
+# This crate is the single source of truth for the RLY-001..RLY-007 relay message set that a DIG
+# Node speaks to a relay server (`relay.dig.net`). It is extracted BYTE-IDENTICAL from the wire that
+# was previously vendored across dig-gossip (`src/relay/relay_types.rs`, the authoritative shape),
+# dig-relay (`src/wire.rs`, server side) and dig-nat (`src/relay.rs`, the relay client) — so a
+# consumer that swaps its vendored copy for this crate sees ZERO wire change.
+#
+# Dependency philosophy: the relay wire is JSON (serde) over a WebSocket and depends only on serde +
+# std — no transport, no Chia stack. The wire identifies peers by a HEX STRING `peer_id` (not a
+# 32-byte `Bytes32`), so — to stay byte-identical — this crate keeps `String` and pulls in no
+# chia-protocol / chia-wallet-sdk type. Relay↔relay framing does not exist yet and is OUT of scope
+# (the mesh, dig_ecosystem #873).
+[package]
+name = "dig-relay-protocol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75.0"
+license = "Apache-2.0 OR MIT"
+description = "Canonical NODE-TO-RELAY wire protocol for the DIG Network relay — the RLY-001..RLY-007 RelayMessage set + RelayPeerInfo, JSON over WebSocket, byte-identical to the wire vendored across dig-gossip/dig-relay/dig-nat."
+repository = "https://github.com/DIG-Network/dig-relay-protocol"
+readme = "README.md"
+keywords = ["relay", "p2p", "nat", "protocol", "dig"]
+categories = ["network-programming"]
+
+[dependencies]
+# The wire is JSON with `#[serde(tag = "type")]`; serde is the only runtime dependency.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# KATs assert the exact serialized JSON bytes + round-trip through serde_json.
+serde_json = "1"
+
+[profile.release]
+overflow-checks = true
