@@ -47,6 +47,18 @@ pub enum RelayMessage {
         network_id: String,
         /// The relay protocol version the node advertises.
         protocol_version: u32,
+        /// The node's advertised gossip LISTEN candidate address(es), IPv6-first (§5.2).
+        ///
+        /// The relay uses each candidate's PORT together with the node's observed reflexive IP to
+        /// build a dialable [`RelayPeerInfo::addresses`] entry it hands to other peers, enabling the
+        /// connect-leg direct-dial path (dig_ecosystem #924, B1). The host is usually the unspecified
+        /// dual-stack address (`[::]`); the useful part the relay keeps is the port.
+        ///
+        /// Additive since protocol v1 (NC-6 soft-fork): pre-#924 peers omit it, so it defaults to
+        /// empty and is skipped from serialization when empty — keeping the wire byte-identical for
+        /// existing peers, which fall back to today's identity-only relayed reachability.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        listen_addrs: Vec<SocketAddr>,
     },
 
     /// Relay → Client: acknowledgement of a [`Register`](RelayMessage::Register).
@@ -196,10 +208,24 @@ pub struct RelayPeerInfo {
     pub connected_at: u64,
     /// Unix time (seconds) the relay last saw activity from the peer.
     pub last_seen: u64,
+    /// The relay-resolved dialable candidate address(es) for this peer, IPv6-first (§5.2).
+    ///
+    /// The relay computes these from the peer's advertised [`RelayMessage::Register`]`::listen_addrs`
+    /// by substituting the peer's observed reflexive IP for any unspecified/loopback/private
+    /// advertised host (keeping the advertised port), so each entry is a real `reflexive_IP:port`
+    /// another node can direct-dial over the existing mTLS path (dig_ecosystem #924, B1).
+    ///
+    /// Additive since protocol v1 (NC-6 soft-fork): pre-#924 relays omit it, so it defaults to empty
+    /// and is skipped from serialization when empty — keeping the wire byte-identical for existing
+    /// relays, whose peers fall back to today's identity-only relayed reachability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<SocketAddr>,
 }
 
 impl RelayPeerInfo {
-    /// Build a `RelayPeerInfo` stamped with the current unix time for `connected_at`/`last_seen`.
+    /// Build a `RelayPeerInfo` stamped with the current unix time for `connected_at`/`last_seen` and
+    /// no resolved dialable addresses (the relay populates [`addresses`](RelayPeerInfo::addresses)
+    /// when it has an observed reflexive IP for the peer).
     ///
     /// Matches the vendored constructors in dig-gossip (`RelayPeerInfo::new`) and dig-relay.
     pub fn new(peer_id: String, network_id: String, protocol_version: u32) -> Self {
@@ -210,6 +236,7 @@ impl RelayPeerInfo {
             protocol_version,
             connected_at: now,
             last_seen: now,
+            addresses: Vec::new(),
         }
     }
 }

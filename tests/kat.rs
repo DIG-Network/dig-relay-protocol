@@ -21,6 +21,7 @@ fn fixture_peer() -> RelayPeerInfo {
         protocol_version: 1,
         connected_at: 100,
         last_seen: 200,
+        addresses: vec![],
     }
 }
 
@@ -45,6 +46,7 @@ fn kat_register() {
             peer_id: "a".into(),
             network_id: "DIG_MAINNET".into(),
             protocol_version: 1,
+            listen_addrs: vec![],
         },
         r#"{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1}"#,
     );
@@ -248,6 +250,117 @@ fn decode_rejects_wrong_field_type() {
         r#"{"type":"register","peer_id":"a","network_id":"n","protocol_version":"x"}"#,
     );
     assert!(err.is_err(), "a wrongly-typed field must be rejected");
+}
+
+// -- #924 WU1: additive connect-leg fields (NC-6 soft-fork) --
+//
+// `Register.listen_addrs` + `RelayPeerInfo.addresses` are additive optional fields carrying dialable
+// candidates for the connect leg (direct-dial B1). Both are `#[serde(default, skip_serializing_if =
+// "Vec::is_empty")]`, so: (a) OLD payloads without them still decode (soft-fork); (b) an EMPTY field
+// is omitted from the bytes, keeping existing-peer wire byte-identical; (c) a NON-EMPTY field
+// round-trips byte-stable, IPv6-first (§5.2).
+
+#[test]
+fn register_soft_fork_old_payload_without_listen_addrs_still_decodes() {
+    // An OLD peer's `register` (no `listen_addrs`) MUST still decode — the field defaults to empty.
+    let old =
+        r#"{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1}"#;
+    let decoded: RelayMessage = serde_json::from_str(old).expect("old register must decode");
+    match decoded {
+        RelayMessage::Register { listen_addrs, .. } => {
+            assert!(
+                listen_addrs.is_empty(),
+                "missing listen_addrs must default to empty"
+            );
+        }
+        other => panic!("expected Register, got {other:?}"),
+    }
+}
+
+#[test]
+fn register_empty_listen_addrs_is_omitted_from_bytes() {
+    // skip_serializing_if: an empty `listen_addrs` must NOT appear on the wire, so the bytes are
+    // byte-identical to what an old peer emits (`kat_register` shares these exact bytes).
+    let encoded = serde_json::to_string(&RelayMessage::Register {
+        peer_id: "a".into(),
+        network_id: "DIG_MAINNET".into(),
+        protocol_version: 1,
+        listen_addrs: vec![],
+    })
+    .expect("serialize");
+    assert_eq!(
+        encoded,
+        r#"{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1}"#,
+        "empty listen_addrs must be omitted from the wire"
+    );
+}
+
+#[test]
+fn register_with_listen_addrs_round_trips_ipv6_first() {
+    // A NEW peer advertises its gossip listen candidates, IPv6-first (§5.2); the bytes round-trip.
+    assert_kat(
+        &RelayMessage::Register {
+            peer_id: "a".into(),
+            network_id: "DIG_MAINNET".into(),
+            protocol_version: 1,
+            listen_addrs: vec![
+                "[2001:db8::1]:9445".parse().unwrap(),
+                "203.0.113.1:9445".parse().unwrap(),
+            ],
+        },
+        r#"{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1,"listen_addrs":["[2001:db8::1]:9445","203.0.113.1:9445"]}"#,
+    );
+}
+
+#[test]
+fn relay_peer_info_soft_fork_old_payload_without_addresses_still_decodes() {
+    // An OLD relay's `RelayPeerInfo` (no `addresses`) MUST still decode — the field defaults empty.
+    let old = r#"{"type":"peers","peers":[{"peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1,"connected_at":100,"last_seen":200}]}"#;
+    let decoded: RelayMessage = serde_json::from_str(old).expect("old peers must decode");
+    match decoded {
+        RelayMessage::Peers { peers } => {
+            assert_eq!(peers.len(), 1);
+            assert!(
+                peers[0].addresses.is_empty(),
+                "missing addresses must default to empty"
+            );
+        }
+        other => panic!("expected Peers, got {other:?}"),
+    }
+}
+
+#[test]
+fn relay_peer_info_empty_addresses_is_omitted_from_bytes() {
+    // skip_serializing_if: an empty `addresses` must NOT appear on the wire (byte-identical to old).
+    let encoded = serde_json::to_string(&RelayMessage::PeerConnected {
+        peer: fixture_peer(),
+    })
+    .expect("serialize");
+    assert_eq!(
+        encoded,
+        r#"{"type":"peer_connected","peer":{"peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1,"connected_at":100,"last_seen":200}}"#,
+        "empty addresses must be omitted from the wire"
+    );
+}
+
+#[test]
+fn relay_peer_info_with_addresses_round_trips_ipv6_first() {
+    // The relay hands a peer its relay-resolved dialable candidates, IPv6-first (§5.2); bytes stable.
+    let peer = RelayPeerInfo {
+        peer_id: "a".into(),
+        network_id: "DIG_MAINNET".into(),
+        protocol_version: 1,
+        connected_at: 100,
+        last_seen: 200,
+        addresses: vec![
+            "[2001:db8::1]:9445".parse().unwrap(),
+            "203.0.113.1:9445".parse().unwrap(),
+        ],
+    };
+    assert_kat(
+        &RelayMessage::PeerConnected { peer },
+        r#"{"type":"peer_connected","peer":{"peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1,"connected_at":100,"last_seen":200,"addresses":["[2001:db8::1]:9445","203.0.113.1:9445"]}}"#,
+    );
 }
 
 #[test]

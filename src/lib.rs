@@ -42,6 +42,7 @@
 //!     peer_id: "deadbeef".into(),
 //!     network_id: "DIG_MAINNET".into(),
 //!     protocol_version: 1,
+//!     listen_addrs: vec![], // additive since v1 — empty is omitted from the wire (NC-6 soft-fork)
 //! };
 //! let json = serde_json::to_string(&register).unwrap();
 //! assert_eq!(

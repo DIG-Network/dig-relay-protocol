@@ -70,8 +70,11 @@ Field order is normative (it is the JSON emission order). Golden examples are th
 
 ### RLY-001 — Registration
 
-- **`register`** — `peer_id: string`, `network_id: string`, `protocol_version: u32`.
-  `{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1}`
+- **`register`** — `peer_id: string`, `network_id: string`, `protocol_version: u32`,
+  `listen_addrs: SocketAddr[]` (§2.9a, additive since v1 — omitted when empty).
+  `{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1}` (empty
+  `listen_addrs` omitted) /
+  `{"type":"register","peer_id":"a","network_id":"DIG_MAINNET","protocol_version":1,"listen_addrs":["[2001:db8::1]:9445","203.0.113.1:9445"]}`
 - **`register_ack`** — `success: bool`, `message: string`, `connected_peers: usize`.
   `{"type":"register_ack","success":true,"message":"registered","connected_peers":3}`
 - **`unregister`** — `peer_id: string`.
@@ -134,9 +137,41 @@ A peer as tracked by the relay, carried in `peers` and `peer_connected`. Fields,
 | `protocol_version` | u32 | Relay protocol version advertised. |
 | `connected_at` | u64 | Unix seconds the peer first connected. |
 | `last_seen` | u64 | Unix seconds of the peer's last activity. |
+| `addresses` | SocketAddr[] | Relay-resolved dialable candidates (§2.9a); omitted when empty. |
 
 The `RelayPeerInfo::new(peer_id, network_id, protocol_version)` constructor stamps `connected_at` ==
-`last_seen` == the current unix time.
+`last_seen` == the current unix time and leaves `addresses` empty (the relay populates it, §2.9a).
+
+---
+
+## 2.9a Connect-leg addressing — `listen_addrs` + `addresses` (additive since v1, NC-6 soft-fork)
+
+The connect leg turns a relay-DISCOVERED peer into a directly-dialable one (dig_ecosystem #924, B1).
+Two additive optional fields carry the dialable candidates; everything else is unchanged.
+
+- **`register.listen_addrs: SocketAddr[]`** — the node's advertised gossip LISTEN candidate
+  address(es), IPv6-first (§5.2). The host is typically the unspecified dual-stack address (`[::]`);
+  the load-bearing part the relay keeps is the PORT.
+- **`RelayPeerInfo.addresses: SocketAddr[]`** — the relay-resolved dialable candidate(s) it hands a
+  peer in `peers`/`peer_connected`, IPv6-first. For each advertised `listen_addr` whose host is
+  unspecified/loopback/private, the relay substitutes the peer's OBSERVED reflexive IP and keeps the
+  advertised port, yielding a real `reflexive_IP:port` another node direct-dials over the existing
+  mTLS path; a public advertised host passes through unchanged.
+
+**Soft-fork contract (NC-6).** Both fields are serialized with `#[serde(default, skip_serializing_if
+= "Vec::is_empty")]`:
+
+- An implementation MUST tolerate their ABSENCE: a payload without them decodes with the field
+  defaulting to empty. Pre-#924 peers/relays therefore interoperate unchanged, falling back to
+  identity-only relayed reachability.
+- An EMPTY field MUST be OMITTED from serialization, so the bytes are byte-identical to what a
+  pre-#924 peer emits — no wire drift for existing peers.
+- A NON-EMPTY field enables the B1 direct-dial path. It appears LAST in each shape's field order
+  (after the fields specified in §3 / §4), preserving the emission order of all prior fields.
+
+This is additive-only per §7 / §5.1 (NC-6): no existing `type`, field, order, or type is removed,
+renamed, or repurposed. The `tests/kat.rs` golden fixtures pin both the omitted-when-empty bytes and
+the non-empty round-trip.
 
 ---
 
