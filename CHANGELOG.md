@@ -18,3 +18,5 @@ This project adheres to [Semantic Versioning](https://semver.org) and
 - Initial commit — dig-relay-protocol scaffold (canonical node-to-relay protocol)
 
 
+
+<!-- v2 seal+mesh WIP (#1199 #1200) -->
