@@ -21,8 +21,18 @@
 //!
 //! ## Scope
 //!
-//! **Node↔relay only.** Relay↔relay (mesh) framing does not exist yet and is tracked separately
-//! (dig_ecosystem #873); it is NOT part of this crate.
+//! The crate owns the WHOLE relay boundary contract: **node↔relay** (RLY-001..007 + the v2
+//! recipient-sealed control frames) AND **relay↔relay** ([`MeshMessage`], the mesh wire). The larger
+//! decentralized-relay NETWORK (on-chain relay discovery, relay-PEX routing, relay-switch policy) is
+//! epic dig_ecosystem #873, which CONSUMES this wire.
+//!
+//! ## v2 — recipient-sealed frames (feature `seal`)
+//!
+//! v2 adds recipient binding: a relay has a **BLS G1 identity key** (`dig-identity`, slot `0x0010`),
+//! advertises a signed [`RelayDescriptor`] in [`RelayMessage::RelayHello`], and every directed
+//! control/mesh frame is sealed to the recipient's key via `dig-message` (carried in
+//! [`RelayMessage::Sealed`]). A frame for relay A cannot be opened by relay B. The default build is
+//! the pure-wire types (serde only); enable `seal` for the [`seal`] helpers + descriptor verification.
 //!
 //! ## Security contracts
 //!
@@ -54,6 +64,21 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod descriptor;
+pub mod ids;
+mod mesh;
 mod message;
+#[cfg(feature = "seal")]
+pub mod seal;
 
+pub use descriptor::RelayDescriptor;
+pub use mesh::MeshMessage;
 pub use message::{RelayMessage, RelayPeerInfo};
+
+/// The v1 relay protocol version (plaintext RLY-001..007; no recipient sealing).
+pub const PROTOCOL_VERSION_V1: u32 = 1;
+
+/// The v2 relay protocol version (adds the BLS relay identity + recipient-sealed control/mesh frames).
+/// Advertised in the signed handshake/`register`; a v2↔v1 peer falls back to plaintext control unless
+/// the v2 side runs in [`seal::SealMode::Required`] (SPEC §7).
+pub const PROTOCOL_VERSION_V2: u32 = 2;

@@ -4,9 +4,13 @@ Normative specification of the **node↔relay** wire protocol for the DIG Networ
 (`relay.dig.net`). This is the authoritative contract an independent reimplementation is built
 against. The key words MUST, MUST NOT, SHOULD, and MAY are used per RFC 2119.
 
-**Scope.** This document specifies the NODE-TO-RELAY protocol only: the messages a DIG Node exchanges
-with a relay server. Relay↔relay (mesh) framing is a **future addition** (dig_ecosystem #873) and is
-NOT specified here; no relay↔relay frame exists in this protocol version.
+**Scope.** This document specifies the whole relay-boundary protocol: the **node↔relay** control wire
+(RLY-001..007 + the v2 recipient-sealed control frames, §8) AND the **relay↔relay** mesh wire (§9). It
+does NOT specify the decentralized-relay NETWORK that DRIVES the mesh (on-chain relay discovery,
+relay-PEX routing, relay-switch policy) — that is dig_ecosystem #873, which consumes this wire.
+
+**Protocol version.** This document specifies **protocol_version 2**. v2 is a strict, additive superset
+of v1 (§7): a v1 peer interoperates unchanged, never emitting the v2 `relay_hello`/`sealed` frames.
 
 **Provenance / byte-identity.** These message shapes are byte-identical to the wire previously
 vendored across `dig-gossip` (`src/relay/relay_types.rs`, the authoritative shape),
@@ -61,6 +65,13 @@ R→C (relay→node), or ↔ (either).
 | `hole_punch_coordinate` | RLY-007 | R→C | Counterpart's external address to dial. |
 | `hole_punch_result` | RLY-007 | C→R | Outcome of a coordinated hole punch. |
 | `error` | — | R→C | Error notification. |
+| `relay_hello` | v2 | R→C | The relay's signed `RelayDescriptor`, sent first (§8). |
+| `sealed` | v2 | ↔ | Transport for a recipient-sealed control/mesh frame (§8/§9). |
+
+The `sealed` variant is `{"type":"sealed","envelope":[<u8>...]}`, where `envelope` is the encoded
+`dig-message` `DigMessageEnvelope` bytes. `relay_hello` is `{"type":"relay_hello","descriptor":{…}}`
+(§8). Both are additive v2 variants; a v1 receiver rejects an unknown `type` (§1), so they are only
+sent to a peer that negotiated v2.
 
 ---
 
@@ -181,26 +192,36 @@ the non-empty round-trip.
 
 The relay terminates the mTLS transport and can see every envelope, so the transport channel alone
 does NOT protect message contents from the relay. Therefore, per ecosystem rule §5.4, every
-**directed** payload — the `payload` bytes of `relay_message` (RLY-002) — MUST be END-TO-END
-ENCRYPTED (sealed) to the recipient's DID-anchored identity key BEFORE it is placed on this wire. The
-relay forwards ciphertext and MUST NOT be able to decrypt it. An implementation MUST NOT put
-recipient-specific plaintext in a `relay_message` payload. A conformance test MUST assert the on-wire
-`payload` bytes at the relay are ciphertext, not plaintext.
+**directed** payload MUST be END-TO-END ENCRYPTED (sealed) to the recipient's DID-anchored identity
+key BEFORE it is placed on this wire. This applies in two layers:
+
+- **`relay_message` (RLY-002)** — the `payload` bytes MUST already be node↔node-sealed to the
+  destination node's key by a higher layer; the relay forwards ciphertext. An implementation MUST NOT
+  put recipient-specific plaintext in a `relay_message` payload.
+- **v2 sealed control + mesh frames** — the directed node↔relay control frames (§8) and ALL mesh
+  frames (§9) are sealed to the recipient RELAY's (or node's) BLS G1 identity key, carried inside a
+  `sealed` envelope. `mesh_forward` is therefore **doubly opaque**: its inner `payload` is already
+  node↔node-sealed, and the whole frame is then relay↔relay-sealed — no relay on the path can read it.
+
+The relay MUST NOT be able to decrypt any of the above. A conformance test MUST assert the on-wire
+sealed bytes are ciphertext, not plaintext (see `tests/seal.rs` — the plaintext marker MUST NOT appear
+in the `sealed` envelope bytes).
 
 `broadcast` (RLY-003) is a public all-peers fan-out (no single recipient) and is therefore NOT
 e2e-sealed to one key; it remains mTLS-authenticated and, where the higher layer requires it, signed.
-The sealing scheme (KEM/AEAD composition + KATs) is specified by the message/identity protocol
-crates, not here; this protocol only carries the sealed bytes.
+Likewise `get_peers`/`peers`/`peer_connected`/`peer_disconnected` are semi-public discovery the relay
+MUST read, and `ping`/`pong`/`error` are plaintext. The sealing scheme (G1-DHKEM/AEAD composition +
+KATs) is specified by `dig-message`/`dig-identity`, not here; this protocol only carries the sealed
+bytes and allocates the band ids.
 
 ### NC-4 — Envelope-only routing
 
 The relay routes purely on ENVELOPE fields — `from`, `to`, `network_id`, and the `type` — and MUST
-NOT inspect, depend on, or branch on the opaque `payload` contents. `get_peers.network_id` filters
-the returned set by network; routing decisions derive only from these envelope fields. This keeps the
-relay a content-agnostic forwarder and is what makes NC-1 sufficient (the relay never needs the
-plaintext to route).
-
----
+NOT inspect, depend on, or branch on the opaque `payload` contents. For a `sealed` frame this is the
+`dig-message` envelope's cleartext header (sender/recipient DID, `message_type`); the frame BODY is
+ciphertext. `get_peers.network_id` filters the returned set by network; routing decisions derive only
+from these envelope fields. This keeps the relay a content-agnostic forwarder and is what makes NC-1
+sufficient (the relay never needs the plaintext to route).
 
 ## 6. Protocol state machine (node side)
 
@@ -230,9 +251,82 @@ MUST NOT block startup, panic, or busy-loop (every retry waits a bounded, capped
 
 ## 7. Versioning & compatibility
 
-- `protocol_version` is advertised in `register` / `RelayPeerInfo` (currently `1`).
+- `protocol_version` is advertised in `register` / `RelayPeerInfo` / the `relay_hello` descriptor.
+  v1 = plaintext RLY-001..007; v2 = adds the BLS relay identity + recipient-sealed control/mesh (§8/§9).
 - The wire is **additive-only**: new `type` variants and new optional fields MAY be added; an existing
   `type`, field name, field order, or field type MUST NOT be removed, renamed, repurposed, or
-  re-typed (doing so breaks byte-identity with deployed nodes).
-- Relay↔relay (mesh) frames will be added under #873 as new `type` values disjoint from every value in
-  §2; they will not change any message specified here.
+  re-typed (doing so breaks byte-identity with deployed nodes). The v2 `relay_hello`/`sealed` variants
+  and the §8/§9 frames are additive; every v1 KAT is unchanged.
+- **Capability negotiation + downgrade rule.** A v2 peer advertises seal capability in its signed
+  `relay_hello` / `register`. A session seals iff BOTH peers speak ≥ v2 and advertise seal support; a
+  v2↔v1 pairing falls back to plaintext control. A node/relay MAY run in **required-seal** mode, in
+  which it MUST REFUSE a session that cannot seal (fail-closed) — so an on-path attacker cannot strip
+  sealing by forging a v1 downgrade. `SealMode::Optional` permits the plaintext fallback.
+- The relay↔relay mesh (§9) uses `type` values disjoint from §2 (band `0x0900`); the decentralized
+  relay NETWORK that drives them is #873, which consumes this wire without changing it.
+
+
+---
+
+## 8. v2 — relay BLS identity, `RelayDescriptor`, and recipient-sealed control
+
+### 8.1 Relay identity
+
+A relay has a node-level **BLS12-381 G1 identity key** — the SAME model as a node (`dig-identity`
+slot `0x0010`, EIP-2333 path `m/12381'/8444'/9'/0'`). A relay is a node with a relay role. The key is
+NOT fund-moving (a future payment-for-connections $DIG venue is out of scope). The relay's `peer_id`
+remains the transport id (`SHA-256(TLS SPKI DER)`); the BLS G1 key is the SEAL/signing identity.
+
+### 8.2 `RelayDescriptor` (anti-substitution binding)
+
+A relay describes itself with a BLS-G2-signed `RelayDescriptor` binding, under one signature:
+`relay_did` (32B on-chain DID) · `bls_g1_pub` (48B G1 identity key) · `peer_id_spki_hash` (32B,
+`SHA-256(TLS SPKI DER)`) · `network_id` · `capabilities` · `addresses` (IPv6-first, §5.2) ·
+`protocol_version` · `timestamp_ms` · `expires_at` · `sig` (96B G2 over all the preceding fields, in
+declared order, length-prefixed under the domain `DIGNET-RELAY-DESCRIPTOR:v2`).
+
+A verifier MUST, fail-closed: (1) subgroup-check `bls_g1_pub`; (2) verify `sig` over the transcript;
+(3) confirm the presented mTLS SPKI hashes to `peer_id_spki_hash`; (4) confirm the descriptor is not
+past `expires_at`. Where chain access exists, it MUST additionally resolve `relay_did → G1` and
+confirm it equals `bls_g1_pub`. Any failure → discard (substitution attempt).
+
+### 8.3 Handshake (chicken-and-egg resolution)
+
+1. On a v2 session the relay sends **`relay_hello { descriptor }`** FIRST — plaintext but BLS-signed.
+2. The node verifies the descriptor (§8.2) against the live mTLS SPKI, authenticating the relay's G1
+   key BEFORE trusting it.
+3. The node then SEALS its `register` to that authenticated key and sends it as a `sealed` frame.
+
+### 8.4 Sealed control frames (band `0x0800`)
+
+The directed control frames are sealed to the recipient's G1 key, carried in a `sealed` envelope whose
+`message_type` is a band-`0x0800` id. SEAL to the **relay** (C→R): `register`, `unregister`,
+`hole_punch_request`, `hole_punch_result`. SEAL to the **node** (R→C): `register_ack`,
+`hole_punch_coordinate`. Opening (`dig-message` `open_message`) provides sender-signature verification,
+anti-replay, expiry, and subgroup checks. A frame sealed to relay A decaps to the wrong key at relay B
+and MUST be discarded.
+
+**Band id allocation** (disjoint from the deferred retainer economy #1202): sealed control occupies
+`0x0800_0001..0x0800_0006`; `0x0800_0100..0x0800_01FF` is RESERVED for #1202's `RTN-*` ids. Mesh (§9)
+uses band `0x0900`.
+
+---
+
+## 9. v2 — relay↔relay mesh (band `0x0900`)
+
+Relays coordinate over the `MeshMessage` frame set, EVERY frame sealed to the peer relay's G1 key
+(carried in a `sealed` envelope, `message_type` in band `0x0900`):
+
+| `type` | id | Purpose |
+|--------|-----|---------|
+| `mesh_hello` / `mesh_hello_ack` | `0x0900_0001` / `_0002` | Mutual handshake advertising each relay's `RelayDescriptor`. |
+| `mesh_peer_exchange` | `0x0900_0003` | Relay-PEX frame (frame only; routing logic is #873). |
+| `mesh_forward` | `0x0900_0004` | Forward a node↔node payload between relays — **doubly opaque** (NC-1). |
+| `mesh_keepalive` | `0x0900_0005` | Inter-relay liveness. |
+| `mesh_handoff` / `mesh_switch` | `0x0900_0006` / `_0007` | Reservation handoff / load-shed signaling. |
+| `mesh_error` | `0x0900_00FF` | Inter-relay error notification. |
+
+A mesh frame misdelivered to the wrong relay decaps to the wrong key → discard. `mesh_forward`'s inner
+`payload` remains node↔node-sealed, so neither the forwarding relay nor any mesh hop can read it.
+
+---
