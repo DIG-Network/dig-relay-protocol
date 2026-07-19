@@ -11,6 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::descriptor::RelayDescriptor;
+
 /// The complete NODE-TO-RELAY protocol message set (RLY-001 … RLY-007).
 ///
 /// Serialized as JSON over a WebSocket. `#[serde(tag = "type")]` places each variant's
@@ -31,9 +33,17 @@ use serde::{Deserialize, Serialize};
 ///   [`HolePunchResult`](RelayMessage::HolePunchResult);
 /// - error — [`Error`](RelayMessage::Error).
 ///
-/// Relay↔relay (mesh) frames are intentionally NOT part of this enum — they do not exist yet and are
-/// tracked separately (dig_ecosystem #873).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// ## v2 additions (additive, §5.1 back-compat)
+///
+/// - **[`RelayHello`](RelayMessage::RelayHello)** — the relay's signed [`RelayDescriptor`], sent
+///   FIRST so a node authenticates the relay's BLS G1 key before sealing its `register` (SPEC §8);
+/// - **[`Sealed`](RelayMessage::Sealed)** — a single transport envelope carrying a `dig-message`
+///   recipient-sealed frame (band `0x0800` control or `0x0900` mesh). Existing v1 variants are
+///   byte-identical; a v1 peer simply never emits these two `type`s.
+///
+/// The relay↔relay mesh frame set ([`crate::MeshMessage`]) travels sealed INSIDE a
+/// [`Sealed`](RelayMessage::Sealed) envelope; it is not a top-level `RelayMessage` variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum RelayMessage {
     // -- RLY-001: Registration --
@@ -189,6 +199,28 @@ pub enum RelayMessage {
         code: u32,
         /// Human-readable error detail.
         message: String,
+    },
+
+    // -- v2: recipient-sealed handshake + transport (additive since v1) --
+    /// Relay → Client: the relay's signed identity record, sent FIRST on a v2 session so the node can
+    /// authenticate the relay's BLS G1 key against the live mTLS SPKI, THEN seal its `register` to it
+    /// (SPEC §8). Plaintext on the wire but BLS-G2-signed — it carries no secret, it authenticates.
+    #[serde(rename = "relay_hello")]
+    RelayHello {
+        /// The relay's self-describing, signed [`RelayDescriptor`] (boxed — it is the largest field,
+        /// so boxing keeps every other `RelayMessage` variant cheap to move; serde-transparent).
+        descriptor: Box<RelayDescriptor>,
+    },
+
+    /// ↔: a recipient-sealed frame. `envelope` is an encoded `dig-message` `DigMessageEnvelope` whose
+    /// `message_type` is a band-`0x0800` (sealed control) or band-`0x0900` (mesh) id. The receiver
+    /// opens it with its BLS G1 secret key (see [`crate::seal`]); a frame sealed to a different relay
+    /// decaps to the wrong key and is discarded. Envelope metadata (sender/recipient DID) is the only
+    /// routable plaintext — the frame body is ciphertext (NC-1).
+    #[serde(rename = "sealed")]
+    Sealed {
+        /// The encoded `dig-message` sealed envelope bytes.
+        envelope: Vec<u8>,
     },
 }
 
