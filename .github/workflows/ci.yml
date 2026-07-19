@@ -37,7 +37,8 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Check clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # --all-features so the `seal` module (dig-message/dig-identity recipient-seal) is linted too.
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build (release)
         run: cargo build --release
@@ -70,11 +71,11 @@ jobs:
       # Unit + integration coverage, CI-gated at >=80% lines (ecosystem standard #157), run through
       # nextest so llvm-cov instruments the SAME nextest execution — running them as separate steps
       # collects ZERO coverage and fails this gate (#488). `--retries 2` reports a flaky test rather
-      # than hard-failing (#489). This crate is pure wire types with no network-bound path, so no
-      # file is ignored.
-      - name: Run tests with coverage (nextest, retries 2, gate >=80% lines)
+      # than hard-failing (#489). `--all-features` so the `seal` module + its security tests are
+      # compiled and measured (without it the recipient-seal code is `#[cfg]`-out and never exercised).
+      - name: Run tests with coverage (nextest, all features, retries 2, gate >=80% lines)
         run: >-
-          cargo llvm-cov nextest --all
+          cargo llvm-cov nextest --all --all-features
           --retries 2
           --fail-under-lines 80
           --lcov --output-path lcov.info
