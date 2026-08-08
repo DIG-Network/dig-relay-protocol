@@ -400,9 +400,9 @@ dependencies = [
 
 [[package]]
 name = "dig-message"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc5e5dea9bebc31c724ed97a8a3a1c0c6aea79809012c5b13cd229140a946679"
+checksum = "13efe0cfe2a6ab661f2c4f8dd947360a34c47f86118621721dfa7d21aa2dcdae"
 dependencies = [
  "chacha20poly1305",
  "chia-bls 0.26.0",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "dig-relay-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dig-identity",
  "dig-message",
