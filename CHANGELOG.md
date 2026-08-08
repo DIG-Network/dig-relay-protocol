@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.3.1] - 2026-08-08
+
+### Chores
+- **deps:** Bump dig-message to 0.5.1 and release v0.3.1 (#5)
+
 ## [0.3.0] - 2026-07-19
 
 ### Features
