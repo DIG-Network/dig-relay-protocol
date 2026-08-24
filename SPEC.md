@@ -25,7 +25,7 @@ superproject `SYSTEM.md`.
 
 - **Transport.** Messages are carried over a **WebSocket**, established over **mTLS** (both parties
   authenticate; the node presents a client cert whose SPKI DER hashes to its `peer_id`). The relay
-  endpoint is `wss://relay.dig.net:9450` by default (canonical `DIG_RELAY_URL`), overridable via the
+  endpoint is `wss://relay.dig.net:443` by default (canonical `DIG_RELAY_URL`), overridable via the
   `DIG_RELAY_URL` environment variable, and disabled with `DIG_RELAY_URL=off`/`disabled`.
 - **Encoding.** Each message is a single JSON object. Implementations SHOULD send it as a WebSocket
   **text** frame; a receiver MUST also accept the identical JSON bytes in a **binary** frame.
